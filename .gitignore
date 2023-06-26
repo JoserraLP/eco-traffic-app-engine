@@ -1,0 +1,8 @@
+congestion_data/
+
+eco_traffic_app_engine/cache/
+
+*.egg-info/
+
+.idea
+.DS_Store

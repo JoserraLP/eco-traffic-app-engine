@@ -1,0 +1,10 @@
+networkx
+OSMPythonTools
+requests
+geopy
+matplotlib
+neomodel==4.0.8
+Shapely==1.7.1
+rpy2
+openpyxl
+pandas
