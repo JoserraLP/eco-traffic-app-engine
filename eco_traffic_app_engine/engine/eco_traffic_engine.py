@@ -336,62 +336,21 @@ class EcoTrafficEngine:
 
         :param graph_db: flag for storing the relation into the graph database. Default True.
         :type graph_db: bool
-
         :return:
         """
         # Define previous node info
         previous_relation = {}
 
+        # First check if first node have information, otherwise search for it on its successors
+        self.extend_initial_empty_nodes(graph_db)
+
         # Iterate over the graph by source-destination pair
         for u, v in self._graph.edges:
-            # Retrieve relation information
-            relation = self._graph.get_edge_data(u, v)
+            # Extend relation info
+            relation = self.extend_relation_info(u, v, previous_relation)
 
-            # Get those attributes that are empty or with default values and update from previous
-            for key, value in relation.items():
-                # Way ID not processed and congestion will be processed afterwards
-                if key != 'way_id' and key != 'congestion':
-                    if value == DEFAULT_WAYS_VALUES[key]:
-                        if key in previous_relation:
-                            relation[key] = previous_relation[key]
-                else:
-                    # Remain the same the way id
-                    relation[key] = value
-
-            # Extend the congestion
-            # Retrieve the predecessor and successor information
-            predecessors, successors = list(self._graph.predecessors(u)), list(self._graph.successors(v))
-
-            predecessor_congestion = successor_congestion = None
-            # It exists a predecessor
-            if predecessors:
-                # Retrieve congestion info
-                predecessor_congestion = self._graph.get_edge_data(predecessors[0], u).get('congestion', None)
-
-            # It exists a successor
-            if successors:
-                # Retrieve relation information
-                successor_congestion = self._graph.get_edge_data(v, successors[0]).get('congestion', None)
-
-            # Both predecessor and successor
-            if predecessor_congestion is not None and relation['congestion'] is None \
-                    and successor_congestion is not None:
-                # print("Both predecessor and successor")
-                # Calculate the mean by now
-                relation['congestion'] = (predecessor_congestion + successor_congestion) // 2  # Floor
-            # Only predecessor congestion information
-            elif predecessor_congestion is not None and relation['congestion'] is None \
-                    and successor_congestion is None:
-                # print("Only predecessor congestion information")
-                relation['congestion'] = predecessor_congestion
-            # Only successor congestion information
-            elif predecessor_congestion is None and relation['congestion'] is None \
-                    and successor_congestion:
-                # print("Only successor congestion information")
-                relation['congestion'] = successor_congestion
-
-            # Store previous info
-            previous_relation = relation
+            # Extend the congestion and store the relation
+            previous_relation = self.extend_congestion_data(u, v, relation)
 
             # Update relation data
             self._graph.add_edge(u, v, **relation)
@@ -399,6 +358,134 @@ class EcoTrafficEngine:
             if graph_db:
                 # Update database information
                 self._graph_db.create_update_relation(relation={'from': u, 'to': v}, road_info=relation)
+
+    def extend_initial_empty_nodes(self, graph_db: bool = True):
+        """
+        Iterate over the first node to check if it has information, if do not, search for it on its successors
+
+        :param graph_db: flag for storing the relation into the graph database. Default True.
+        :type graph_db: bool
+        :return:
+        """
+        last_relation = {}
+        passed_nodes = []
+        # Iterate over the graph by source-destination pair
+        for u, v in self._graph.edges:
+            # Append the source node
+            passed_nodes.append(u)
+            # Retrieve relation information
+            relation = self._graph.get_edge_data(u, v)
+            # Check non-default values of the relation
+            default_keys = [k for k, v in relation.items() if k in DEFAULT_WAYS_VALUES and
+                            v == DEFAULT_WAYS_VALUES[k]]
+            # Check default keys -> If there are the ones specified it means it is unchanged
+            while default_keys == ['slope', 'maxspeed', 'lanes', 'highway', 'name', 'surface']:
+                # Retrieve new successor
+                successors = list(self._graph.successors(v))
+                # There are successors
+                if successors:
+                    # Get new relation value
+                    relation = self._graph.get_edge_data(v, successors[0])
+                    # Check non-default values of the relation
+                    default_keys = [k for k, v in relation.items() if k in DEFAULT_WAYS_VALUES and
+                                    v == DEFAULT_WAYS_VALUES[k]]
+                # Append target to passed nodes
+                passed_nodes.append(v)
+                # Update last_relation variable
+                last_relation = relation
+                # Update target to its successor
+                v = successors[0]
+            # Once a node with non-default values is achieved, stop searching
+            break
+
+        # Iterate over the passed nodes
+        for u, v in zip(passed_nodes[:-1], passed_nodes[1:]):
+            relation = self._graph.get_edge_data(u, v)
+            # Get those attributes that are empty or with default values and update from previous
+            for key, value in relation.items():
+                # Way ID, distance, congestion and slope are not copied
+                if key != 'way_id' and key != 'congestion' and key != 'distance' and key != 'slope':
+                    relation[key] = last_relation[key]
+                else:
+                    # Remain the same value as previous
+                    relation[key] = value
+
+            # Update relation data
+            self._graph.add_edge(u, v, **relation)
+
+            if graph_db:
+                # Update database information
+                self._graph_db.create_update_relation(relation={'from': u, 'to': v}, road_info=relation)
+
+    def extend_relation_info(self, source, target, previous_relation: dict) -> dict:
+        """
+        Extend relation information based on the previous relation
+
+        :param source: source node
+        :param target: target node
+        :param previous_relation: previous relation information
+        :type previous_relation: dict
+        :return: updated relation information
+        :rtype: dict
+        """
+        # Retrieve relation information
+        relation = self._graph.get_edge_data(source, target)
+
+        # Get those attributes that are empty or with default values and update from previous
+        for key, value in relation.items():
+            # Way ID not processed and congestion will be processed afterwards
+            if key != 'way_id' and key != 'congestion':
+                if value == DEFAULT_WAYS_VALUES[key]:
+                    if key in previous_relation:
+                        relation[key] = previous_relation[key]
+            else:
+                # Remain the same the way id
+                relation[key] = value
+
+        return relation
+
+    def extend_congestion_data(self, source, target, relation: dict) -> dict:
+        """
+        Extend traffic congestion info based on the adjacent congestion info
+
+        :param source: source node
+        :param target: destination node
+        :param relation: information related to the connection
+        :type relation: dict
+        :return: updated relation dict with new congestion info
+        :rtype: dict
+        """
+        # Retrieve the predecessor and successor information
+        predecessors, successors = list(self._graph.predecessors(source)), list(self._graph.successors(target))
+
+        predecessor_congestion = successor_congestion = None
+        # It exists a predecessor
+        if predecessors:
+            # Retrieve congestion info
+            predecessor_congestion = self._graph.get_edge_data(predecessors[0], source).get('congestion', None)
+
+        # It exists a successor
+        if successors:
+            # Retrieve relation information
+            successor_congestion = self._graph.get_edge_data(target, successors[0]).get('congestion', None)
+
+        # Both predecessor and successor
+        if predecessor_congestion is not None and relation['congestion'] is None \
+                and successor_congestion is not None:
+            # print("Both predecessor and successor")
+            # Calculate the mean by now
+            relation['congestion'] = (predecessor_congestion + successor_congestion) // 2  # Floor
+        # Only predecessor congestion information
+        elif predecessor_congestion is not None and relation['congestion'] is None \
+                and successor_congestion is None:
+            # print("Only predecessor congestion information")
+            relation['congestion'] = predecessor_congestion
+        # Only successor congestion information
+        elif predecessor_congestion is None and relation['congestion'] is None \
+                and successor_congestion:
+            # print("Only successor congestion information")
+            relation['congestion'] = successor_congestion
+        return relation
 
     def stop_engine(self):
         """
