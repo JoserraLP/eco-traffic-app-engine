@@ -106,9 +106,11 @@ class EcoTrafficEngine:
             destination_ways_nodes = {item['id']: item['nodes'] for item in destination_additional_info}
 
             way_id = None
+            # Iterate over all the source and destination possible ways and its nodes
             for source_id, source_nodes in source_ways_nodes.items():
                 for destination_id, destination_nodes in destination_ways_nodes.items():
-                    if set(source_nodes) & set(destination_nodes):
+                    # If the set of nodes is the same on both ways, it means the way is the valid one
+                    if set(source_nodes) == set(destination_nodes):
                         way_id = source_id
 
             way_index = None
@@ -221,8 +223,7 @@ class EcoTrafficEngine:
                     # (in the interval from it_source_idx and  it_dest_idx)
                     # The key parameter is the condition to get the minimum which is:
                     # For each element of the list, calculate the distance between it_source and the element, minus the
-                    # it_distance
-                    # GD (source_coords , destination_coords)
+                    # it_distance GD (source_coords , destination_coords)
                     mid_point = min(nodes[it_source_idx:it_dest_idx],
                                     key=lambda x: abs((gd((it_source_info.lat, it_source_info.lon),
                                                           (self._osm_retriever.get_osm_node_info(x).lat,
