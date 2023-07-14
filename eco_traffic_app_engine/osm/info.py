@@ -82,14 +82,20 @@ class OSMRetriever:
         :rtype: list
         """
         # Define coordinates str based on coordinates (lat, lon)
-        nodes_union_str = '\n'.join([f"node(around:1,{item[1]},{item[0]});" for item in road_coords])
+        osm_nodes = []
 
-        # Query to get the nodes by its around areas
-        query = f'({nodes_union_str}); out;'
+        # It can not be done as a grouped query as the results are ordered by ID and the graph is not created well
 
-        # Execute query
-        results = self._overpass.query(query)
-        return [item._json['id'] for item in results.elements()]
+        for coords in road_coords:
+            # Query to get the nodes by its around areas
+            query = f'node(around:1,{coords[1]},{coords[0]}); out;'
+
+            # Execute query
+            results = self._overpass.query(query)
+
+            osm_nodes += [item._json['id'] for item in results.elements()]
+
+        return osm_nodes
 
     def get_osm_way_info(self, node_id: str) -> list:
         """

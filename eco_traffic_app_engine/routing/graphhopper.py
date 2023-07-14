@@ -1,37 +1,37 @@
 import requests
+from eco_traffic_app_engine.osm.info import OSMRetriever
 
 
-class OSRM:
+class GraphHopper:
     """
-    Open Source Routing Machine service requestor
+    GraphHopper service requestor
     """
 
     def __init__(self, params: dict):
         self._routes = []
         self._params = params
 
-    def get_routes(self, coords: list) -> list:
+    def get_routes(self) -> list:
         """
-        Get routes from OSRM service with the given coords
+        Get routes from GraphHopper service with the given params
 
-        :param coords: list of pair coordinates
-        :type coords: list
         :return: routes
         :rtype: list
         """
         # Perform query
-        response = requests.get("https://router.project-osrm.org/route/v1/driving/" +
-                                ";".join(f"{coord[1]},{coord[0]}" for coord in coords),
+        response = requests.get("https://graphhopper.com/api/1/route",
                                 params=self._params)
 
+        osm_retriever = OSMRetriever()
+
         # Check if there exists the response
-        if response:
+        if response.status_code == 200:
             # Store the routes from response
-            routes = response.json()['routes']
+            routes = response.json()['paths']
 
             self._routes = [{'distance': route['distance'],
-                             'duration': route['duration'],
-                             'nodes': [node for item in route['legs'] for node in item['annotation']['nodes']]}
+                             'duration': route['time']/1000.0,
+                             'nodes': osm_retriever.get_osm_nodes(route['points']['coordinates'])}
                             for route in routes]
 
         return self._routes

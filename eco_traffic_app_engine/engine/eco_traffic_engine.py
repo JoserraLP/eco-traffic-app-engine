@@ -147,11 +147,14 @@ class EcoTrafficEngine:
         :return:
         """
 
-        # Get legs to retrieve order of the nodes
-        route_nodes = route['legs'][0]['annotation']['nodes']
+        # Retrieve the nodes from the route
+        route_nodes = route['nodes']
 
         # Remove non-intersection values
         nodes = self._osm_retriever.remove_non_intersections_nodes(route_nodes)
+
+        # Remove duplicates keeping the order
+        nodes = list(dict.fromkeys(nodes).keys())
 
         # Remove roundabouts
         # nodes = [node for node in nodes if not is_in_roundabout(node)]
@@ -168,10 +171,10 @@ class EcoTrafficEngine:
             # Retrieve nodes from the routes
             nodes = self.get_nodes_from_route(route)
 
-            # String for overpassQL
-            print('\n'.join([f"node(id:{item});" for item in nodes]))
-
             self.process_nodes_relations(nodes=nodes)
+
+            # String for overpassQL
+            print('\n'.join([f"node(id:{item});" for item in self._graph.nodes]))
 
     def process_nodes_relations(self, nodes: list):
         """
