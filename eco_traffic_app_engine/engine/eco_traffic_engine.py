@@ -5,7 +5,7 @@ import pandas as pd
 from geopy.distance import geodesic as gd
 
 from eco_traffic_app_engine.graph.db.neo4j import GraphDB
-from eco_traffic_app_engine.graph.models import Node, Road
+from eco_traffic_app_engine.graph.models import Node, Segment, Coords
 from eco_traffic_app_engine.osm.info import OSMRetriever
 from eco_traffic_app_engine.static.constants import *
 from eco_traffic_app_engine.static.constants import CONGESTION_DICT
@@ -31,8 +31,31 @@ class EcoTrafficEngine:
         # Initialize routes
         self._routes = routes
 
+        # Create a dict with the coordinates and a related identifier
+        self._coordinates_ids = {}
+
+        # Last identifier used
+        self._last_id = 0
+
         # Clean up the network database
         self._graph_db.clear_database()
+
+    def get_coordinates_id(self, coords: Coords) -> str:
+        """
+        Get coordinates id for the graph based on its latitude and longitude
+        :param coords:
+        :return:
+        """
+        coords_str = f'{coords.lat};{coords.lon}'  # ID = lat;lon
+
+        # Retrieve the node id if exists, otherwise calculate it and store it
+        if coords_str in self._coordinates_ids:
+            coords_id = self._coordinates_ids[coords_str]
+        else:
+            self._coordinates_ids[coords_str] = coords_id = self._last_id
+            self._last_id += 1
+
+        return str(coords_id)
 
     def create_node(self, node_info: Node, graph_db: bool = True) -> None:
         """
@@ -45,15 +68,15 @@ class EcoTrafficEngine:
         :return: None
         """
         # Check if node exists
-        if node_info.name not in self._graph.nodes:
+        if node_info.node_id not in self._graph.nodes:
             # Add node
-            self._graph.add_node(node_info.name, lat=node_info.lat, lon=node_info.lon, height=node_info.height)
+            self._graph.add_node(node_info.node_id, lat=node_info.lat, lon=node_info.lon, height=node_info.height)
 
             # Check if it is required to store in the graph database
             if graph_db:
                 self._graph_db.create_node(asdict(node_info))
 
-    def create_relation(self, source_id: str, destination_id: str, road_info: Road, graph_db: bool = True) -> None:
+    def create_relation(self, source_id: str, destination_id: str, segment_info: Segment, graph_db: bool = True) -> None:
         """
         Create a relation between source and destination nodes in the memory graph and/or graph database
 
@@ -61,105 +84,21 @@ class EcoTrafficEngine:
         :type source_id: str
         :param destination_id: destination node identifier
         :type destination_id: Node
-        :param road_info: road information
-        :type road_info: Road
+        :param segment_info: segment information
+        :type segment_info: Segment
         :param graph_db: flag for storing the relation into the graph database. Default True.
         :type graph_db: bool
         :return: None
         """
         # Store relation
-        self._graph.add_edge(source_id, destination_id, slope=road_info.slope, distance=road_info.distance,
-                             congestion=road_info.congestion, maxspeed=road_info.maxspeed, lanes=road_info.lanes,
-                             highway=road_info.highway, name=road_info.name, surface=road_info.surface,
-                             way_id=road_info.way_id)
+        self._graph.add_edge(source_id, destination_id, slope=segment_info.slope, distance=segment_info.distance,
+                             congestion=segment_info.congestion, max_speed=segment_info.max_speed, lanes=segment_info.lanes,
+                             highway=segment_info.highway, name=segment_info.name, surface=segment_info.surface,
+                             way_id=segment_info.way_id)
         # Check if it is required to store in the graph database
         if graph_db:
             self._graph_db.create_update_relation({'from': source_id, 'to': destination_id},
-                                                  road_info=asdict(road_info))
-
-    def get_road_info(self, source_info: Node, destination_info: Node) -> Road:
-        """
-        Retrieve road information from different data sources
-
-        :param source_info: source node information
-        :type source_info: Node
-        :param destination_info: destination node information
-        :type destination_info: Node
-
-        :return: road information
-        :rtype: Road
-        """
-        # Calculate distance between source and destination
-        distance = gd((source_info.lat, source_info.lon), (destination_info.lat, destination_info.lon)).meters
-
-        # Get the road info based on the source and destination nodes
-        source_additional_info = self._osm_retriever.get_osm_way_info(source_info.name)
-        destination_additional_info = self._osm_retriever.get_osm_way_info(destination_info.name)
-
-        # Single element -> Non junction
-        if len(source_additional_info) == 1:
-            way_id = source_additional_info[0]['id']
-            way_info = source_additional_info[0]['tags']
-        else:
-            # Iterate over the nodes instead of getting the id
-            source_ways_nodes = {item['id']: item['nodes'] for item in source_additional_info}
-            destination_ways_nodes = {item['id']: item['nodes'] for item in destination_additional_info}
-
-            way_id = None
-            # Iterate over all the source and destination possible ways and its nodes
-            for source_id, source_nodes in source_ways_nodes.items():
-                for destination_id, destination_nodes in destination_ways_nodes.items():
-                    # If the set of nodes is the same on both ways, it means the way is the valid one
-                    if set(source_nodes) == set(destination_nodes):
-                        way_id = source_id
-
-            way_index = None
-            # Iterate over the source nodes
-            for index, item in enumerate(source_additional_info):
-                if item['id'] == way_id:
-                    way_index = index
-
-            # Get by index if exists, otherwise leave empty and it will be extended later
-            if way_index and 'tags' in source_additional_info[way_index]:
-                way_info = source_additional_info[way_index]['tags']
-            else:
-                way_info = {}
-
-        maxspeed = way_info.get('maxspeed', DEFAULT_WAYS_VALUES['maxspeed'])
-        lanes = way_info.get('lanes', DEFAULT_WAYS_VALUES['lanes'])
-        highway = way_info.get('highway', DEFAULT_WAYS_VALUES['highway'])
-        name = way_info.get('name', DEFAULT_WAYS_VALUES['name'])
-        surface = way_info.get('surface', DEFAULT_WAYS_VALUES['surface'])
-
-        if not self._osm_retriever.is_in_roundabout(source_info.name) or \
-                not self._osm_retriever.is_in_roundabout(destination_info.name):
-            slope = (destination_info.height - source_info.height) * 100 / distance
-        else:
-            slope = DEFAULT_WAYS_VALUES['slope']
-
-        return Road(slope=slope, distance=distance, congestion=None, maxspeed=maxspeed, lanes=lanes, highway=highway,
-                    name=name, surface=surface, way_id=way_id)
-
-    def get_nodes_from_route(self, route: dict) -> list:
-        """
-
-        :param route:
-        :return:
-        """
-
-        # Retrieve the nodes from the route
-        route_nodes = route['nodes']
-
-        # Remove non-intersection values
-        nodes = self._osm_retriever.remove_non_intersections_nodes(route_nodes)
-
-        # Remove duplicates keeping the order
-        nodes = list(dict.fromkeys(nodes).keys())
-
-        # Remove roundabouts
-        # nodes = [node for node in nodes if not is_in_roundabout(node)]
-
-        return nodes
+                                                  segment_info=asdict(segment_info))
 
     def process_routes(self):
         """
@@ -168,95 +107,31 @@ class EcoTrafficEngine:
         :return:
         """
         for route in self._routes:
-            # Retrieve nodes from the routes
-            nodes = self.get_nodes_from_route(route)
 
-            self.process_nodes_relations(nodes=nodes)
+            # Retrieve segments
+            segments = route['segments']
 
-            # String for overpassQL
-            print('\n'.join([f"node(id:{item});" for item in self._graph.nodes]))
+            # Iterate over pairs of coordinates creating only destination nodes
+            for idx, (source, destination) in enumerate(zip(segments, segments[1:])):
+                # Get only destination id
+                source_id = self.get_coordinates_id(source)
+                destination_id = self.get_coordinates_id(destination)
 
-    def process_nodes_relations(self, nodes: list):
-        """
-        Process and create nodes and relations on the graph
+                # Create the destination node info
+                source_node = Node(node_id=source_id, lat=source.lat, lon=source.lon, height=route['heights'][idx])
+                destination_node = Node(node_id=destination_id, lat=destination.lat, lon=destination.lon,
+                                        height=route['heights'][idx+1])
 
-        :param nodes: list of OSM nodes
-        :type nodes: list
-        :return:
-        """
-        # Retrieve node info from first element
-        node_info = self._osm_retriever.get_osm_node_info(nodes[0])
-        # Create given node
-        self.create_node(node_info)
-        # Define variable to update the source based on distance conditions
-        new_source = None
-        # Iterate over the nodes in packs of two
-        for source, destination in zip(nodes[:-1], nodes[1:]):
+                # Store the source and destination nodes
+                self.create_node(node_info=source_node)
+                self.create_node(node_info=destination_node)
 
-            # Update source to previous value if exists
-            source = new_source if new_source else source
-
-            # Retrieve node info
-            destination_node_info = self._osm_retriever.get_osm_node_info(destination)
-            source_node_info = self._osm_retriever.get_osm_node_info(source)
-
-            # Get road info to check distance
-            road_info = self.get_road_info(source_node_info, destination_node_info)
-
-            if road_info.distance < MIN_DISTANCE_NODES:
-                # When distance is lower, retrieve new source
-                new_source = source if new_source is None else new_source
-            elif road_info.distance > MAX_DISTANCE_NODES:
-                # When distance is higher, calculate intermediate nodes
-                # Define number of iterations
-                iterations = int(road_info.distance // MIN_DISTANCE_NODES)  # Floor
-                # Calculate distance of each iteration
-                it_distance = road_info.distance / iterations
-
-                # Define source and destination per iteration (index for slicing and value)
-                it_source = source
-                it_source_info = source_node_info
-                # Retrieve index of destination iteration
-                it_dest_idx = nodes.index(destination)
-                for i in range(iterations - 1):
-                    # Retrieve index of source iteration
-                    it_source_idx = nodes.index(it_source)
-
-                    # Obtain the node with the minimum distance from the list of selected nodes
-                    # (in the interval from it_source_idx and  it_dest_idx)
-                    # The key parameter is the condition to get the minimum which is:
-                    # For each element of the list, calculate the distance between it_source and the element, minus the
-                    # it_distance GD (source_coords , destination_coords)
-                    mid_point = min(nodes[it_source_idx:it_dest_idx],
-                                    key=lambda x: abs((gd((it_source_info.lat, it_source_info.lon),
-                                                          (self._osm_retriever.get_osm_node_info(x).lat,
-                                                           self._osm_retriever.get_osm_node_info(x).lon)
-                                                          ).meters) - it_distance))
-
-                    # If there is no point closer than the source, the loop ends
-                    if it_source == mid_point:
-                        break
-                    # Get middle point information
-                    mid_point_info = self._osm_retriever.get_osm_node_info(mid_point)
-
-                    # If the loop continues, the new point is created with the relation
-                    self.create_node(mid_point_info)
-                    self.create_relation(it_source, mid_point, self.get_road_info(it_source_info, mid_point_info))
-
-                    # Source node is updated to the last inserted
-                    it_source = mid_point
-                    it_source_info = mid_point_info
-
-                # Destination node and the road are inserted
-                self.create_node(destination_node_info)
-                self.create_relation(it_source, destination, self.get_road_info(it_source_info, destination_node_info))
-                new_source = None
-
-            else:
-                # Otherwise there is no problem with the distance, create node and relation as it is
-                self.create_node(destination_node_info)
-                self.create_relation(source, destination, road_info)
-                new_source = None
+                # Create the segment info
+                segment_info = Segment(slope=route['slopes'][idx], distance=route['distances'][idx],
+                                       max_speed=route['max_speed'][idx], congestion=None, lanes=0, highway="",
+                                       name="", surface="", way_id="")
+                # Store the relation between them
+                self.create_relation(source_id, destination_id, segment_info)
 
     def insert_congestion_graph(self, congestion_df: pd.DataFrame):
         """
@@ -276,7 +151,7 @@ class EcoTrafficEngine:
             neighbors = list(self._graph.neighbors(node_id))
             # Iterate over the neighbors
             for neighbor in neighbors:
-                # Add congestion to road relation between source and destination
+                # Add congestion to segment relation between source and destination
                 self._graph[node_id][neighbor]['congestion'] = congestion
                 # In the graph db, update only the info related to the congestion
                 self._graph_db.create_update_relation({'from': node_id, 'to': neighbor}, {'congestion': congestion})
@@ -322,7 +197,7 @@ class EcoTrafficEngine:
                                                for i in congestion_center_nodes)
 
         # Request congestion data
-        request_congestion_data(congestion_center_nodes_str)
+        # request_congestion_data(congestion_center_nodes_str)
 
         # Process congestion data
         self._traffic_congestion_retriever.process_congestion_data()
@@ -361,7 +236,7 @@ class EcoTrafficEngine:
 
             if graph_db:
                 # Update database information
-                self._graph_db.create_update_relation(relation={'from': u, 'to': v}, road_info=relation)
+                self._graph_db.create_update_relation(relation={'from': u, 'to': v}, segment_info=relation)
 
     def extend_initial_empty_nodes(self, graph_db: bool = True):
         """
@@ -419,7 +294,7 @@ class EcoTrafficEngine:
 
             if graph_db:
                 # Update database information
-                self._graph_db.create_update_relation(relation={'from': u, 'to': v}, road_info=relation)
+                self._graph_db.create_update_relation(relation={'from': u, 'to': v}, segment_info=relation)
 
     def extend_relation_info(self, source, target, previous_relation: dict) -> dict:
         """

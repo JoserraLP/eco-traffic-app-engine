@@ -1,7 +1,7 @@
 from neomodel import db, clear_neo4j_database, config
 from neomodel.contrib.spatial_properties import NeomodelPoint
 
-from eco_traffic_app_engine.graph.db.models import Node, Road
+from eco_traffic_app_engine.graph.db.models import Node, Segment
 
 
 class GraphDB:
@@ -50,31 +50,31 @@ class GraphDB:
         :type node: dict
         :return: None
         """
-        Node(name=node['name'], geospatial_point=NeomodelPoint(latitude=node['lat'], longitude=node['lon'],
-                                                               height=node['height'], crs='wgs-84-3d')).save()
+        Node(node_id=node['node_id'], geospatial_point=NeomodelPoint(latitude=node['lat'], longitude=node['lon'],
+                                                                     height=node['height'], crs='wgs-84-3d')).save()
 
     @staticmethod
-    def create_update_relation(relation: dict, road_info: dict) -> None:
+    def create_update_relation(relation: dict, segment_info: dict) -> None:
         """
         Create/Update a relationship in the network
 
         :param relation: relation information
         :type relation: dict
-        :param road_info: road additional information
-        :type road_info: dict
+        :param segment_info: road additional information
+        :type segment_info: dict
         :return: None
         """
-        source = Node.nodes.get(name=relation['from'])
-        target = Node.nodes.get(name=relation['to'])
+        source = Node.nodes.get(node_id=relation['from'])
+        target = Node.nodes.get(node_id=relation['to'])
         # If they are not connected create the relation
-        if not source.road_to.is_connected(target):
-            source.road_to.connect(target, Road(**road_info).__dict__).save()
+        if not source.segment_to.is_connected(target):
+            source.segment_to.connect(target, Segment(**segment_info).__dict__).save()
         # Otherwise update existing relation
         else:
             # Get road relationship between nodes
-            rel = source.road_to.relationship(target)
+            rel = source.segment_to.relationship(target)
             # Iterate over the attributes
-            for k, v in road_info.items():
+            for k, v in segment_info.items():
                 # A dict update is not possible
                 setattr(rel, k, v)
             # Save the relation in the database
@@ -95,11 +95,11 @@ class GraphDB:
         :return: None
         """
         # Get source and target
-        source = Node.nodes.get(name=source)
-        target = Node.nodes.get(name=target)
+        source = Node.nodes.get(node_id=source)
+        target = Node.nodes.get(node_id=target)
 
         # Get relation between nodes
-        relation = source.road_to.relationship(target)
+        relation = source.segment_to.relationship(target)
 
         # Update relation congestion
         relation.congestion = congestion

@@ -1,41 +1,49 @@
-import requests
+from openrouteservice import Client, convert
+from openrouteservice.directions import directions
 
 from eco_traffic_app_engine.graph.models import Coords
 from eco_traffic_app_engine.routing.utils import process_route
 
 
-class OSRM:
+class OpenRouteService:
     """
-    Open Source Routing Machine service requestor
+    Open Route Service requestor
     """
 
     def __init__(self, params: dict):
         self._routes = []
         self._params = params
+        self._client = Client(base_url='http://localhost:8081/ors')
 
     def get_routes(self, coords: list) -> list:
         """
-        Get routes from OSRM service with the given coords
+        Get routes from Open Route Service with the given coords
 
-        :param coords: list of Coords info
+        :param coords: list of pair coordinates
         :type coords: list
         :return: routes
         :rtype: list
         """
-        # Perform query
-        response = requests.get("https://router.project-osrm.org/route/v1/driving/" +
-                                ";".join(f"{coord.lon},{coord.lat}" for coord in coords),
-                                params=self._params)
+
+        # Swap order of the coordinates (longitude, latitude)
+        coords = [[item.lon, item.lat] for item in coords]
+
+        # Perform query using params if they exists
+        if self._params:
+            routes = directions(self._client, coords, alternative_routes=self._params)['routes']
+        else:
+            routes = directions(self._client, coords)['routes']
 
         # Create a list for the processed routes
         processed_routes = []
 
-        # Check if there exists the response
-        if response:
-            # Store the routes from response
-            routes = response.json()['routes']
+        # Check if there exists the routes
+        if routes:
 
             for route in routes:
+                # Decode each route polyline
+                route['geometry'] = convert.decode_polyline(route['geometry'])
+
                 # Parse coordinates to Coords class
                 route['geometry']['coordinates'] = [Coords(lat=item[1], lon=item[0]) for item in
                                                     route['geometry']['coordinates']]
@@ -43,8 +51,8 @@ class OSRM:
                 # Create processed route
                 processed_route = process_route(route_coordinates=route['geometry']['coordinates'])
                 # Get router service estimated distance and duration
-                processed_route['router_distance'] = route['distance']
-                processed_route['router_duration'] = route['duration']
+                processed_route['router_distance'] = route['summary']['distance']
+                processed_route['router_duration'] = route['summary']['duration']
 
                 # Append the processed route
                 processed_routes.append(processed_route)
